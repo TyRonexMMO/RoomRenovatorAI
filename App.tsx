@@ -1,17 +1,27 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { GoogleGenAI } from "@google/genai";
-import { ChatMessage, RenovationStage } from './types.ts';
-import MessageBubble from './MessageBubble.tsx';
-import { Send, Upload, Layers, Image as ImageIcon, UserCheck, Key, X, Save, AlertCircle } from 'lucide-react';
+import { ChatMessage, RenovationStage, GenerationState } from './types';
+import MessageBubble from './components/MessageBubble';
+import { Camera, Send, Upload, RefreshCw, Layers, Film, Image as ImageIcon } from 'lucide-react';
 
 const INTRO_TEXT_KHMER = `សួស្តី! ខ្ញុំគឺជាអ្នកកែលម្អបន្ទប់ — ត្រៀមខ្លួនជាស្រេចក្នុងការផ្លាស់ប្តូរទីធ្លាដែលទ្រុឌទ្រោម ទៅជាបន្ទប់ក្នុងក្តីសុបិន! 🏗️✨
 
-⚠️ **ដើម្បីចាប់ផ្តើម៖** សូមចុចប៊ូតុង **"បញ្ចូល API Key"** ខាងលើ រួចដាក់ Key របស់អ្នកពី Google AI Studio។
+ខ្ញុំប្រើប្រាស់បច្ចេកវិទ្យា Gemini Image ដើម្បីបង្កើតរូបភាពកែលម្អបន្ទប់ជូនអ្នកដោយឥតគិតថ្លៃ។
 
-រូបភាពដែលបានបង្កើត តម្រូវឱ្យមាន API Key ពី **Paid Project** (គណនីដែលមាន Billing)។ ប្រសិនបើអ្នកប្រើ Key ឥតគិតថ្លៃ វាអាចនឹងជួបបញ្ហាក្នុងការបង្កើតរូបភាព។
+នេះជារបៀបដែលវាដំណើរការ៖
 
-ផ្ញើរូបថតបន្ទប់របស់អ្នកមក ហើយយើងចាប់ផ្តើមទាំងអស់គ្នា! 📸`;
+1️⃣ បង្ហោះរូបថតបន្ទប់ដែលអ្នកចង់កែលម្អ (រូបថតដែលបន្ទប់ទទេ ឬទ្រុឌទ្រោម)
+
+2️⃣ ខ្ញុំនឹងបង្កើតដំណាក់កាលកែលម្អចំនួន ៤៖
+ដំណាក់កាលទី ១៖ ការវាយកម្ទេច
+ដំណាក់កាលទី ២៖ ការរៀបចំជញ្ជាំង និងការបូកកំបោរ
+ដំណាក់កាលទី ៣៖ ការក្រាលការ៉ូ និងការលាបថ្នាំ
+ដំណាក់កាលទី ៤៖ ការតុបតែងចុងក្រោយ
+
+3️⃣ ជាពិសេស ខ្ញុំអាចផ្តល់ជូនអ្នកនូវ "Prompts" សម្រាប់បង្កើតវីដេអូ Timelapse ទាំង ៤ ដំណាក់កាល ដែលអ្នកអាច Copy ឬទាញយកជាឯកសារបាន!
+
+ផ្ញើរូបថតបន្ទប់របស់អ្នកមក ឬអូសរូបភាពទម្លាក់ទីនេះ ហើយយើងចាប់ផ្តើមទាំងអស់គ្នា! 📸`;
 
 const STAGE_LABELS: Record<RenovationStage, string> = {
   [RenovationStage.ORIGINAL]: 'រូបភាពដើម',
@@ -40,13 +50,13 @@ const getClosestAspectRatio = (width: number, height: number): SupportedAspectRa
 const getStagePrompt = (stage: RenovationStage, roomType: string) => {
   switch (stage) {
     case RenovationStage.DEMOLITION:
-      return `Stage 1: Demolition. Show this ${roomType} in construction demolition. Debris, exposed studs, removed fixtures. Cinematic construction lighting.`;
+      return `Stage 1: Demolition. Show this ${roomType} in a state of construction demolition. Debris on floor, broken tiles, removed old fixtures, exposed wooden studs. Keep the architectural layout of the original ${roomType}. Professional construction photography.`;
     case RenovationStage.WALL_PREP:
-      return `Stage 2: Wall prep. Clean raw room. New drywall, plastering, visible conduits. Professional interior shell.`;
+      return `Stage 2: Wall prep. The ${roomType} is now clean but raw. New drywall installed on walls, fresh plastering, visible electrical conduits, cement floor. Very clean construction shell of a ${roomType}.`;
     case RenovationStage.FLOORING_PAINT:
-      return `Stage 3: Flooring and paint. Modern soft white walls, luxury floor being installed. Bright natural light.`;
+      return `Stage 3: Flooring and paint. The ${roomType} walls are painted in modern soft white. New high-end flooring (matching ${roomType} usage) is being laid out. Bright natural morning light. No furniture yet.`;
     case RenovationStage.FINAL_DECOR:
-      return `Stage 4: Final luxury décor. Stunning, modern ${roomType}. Ultra-realistic interior design magazine style, cinematic lighting.`;
+      return `Stage 4: Final luxury décor. A stunning, high-end modern ${roomType}. ONLY use furniture and decor appropriate for a ${roomType}. If it is a Bathroom, add luxury vanity and shower, NO BED. If it is a Kitchen, add modern cabinets and island, NO TOILET. Ultra-realistic, interior design magazine style, cinematic lighting, aesthetic and attractive.`;
     default:
       return "";
   }
@@ -54,16 +64,32 @@ const getStagePrompt = (stage: RenovationStage, roomType: string) => {
 
 const App: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { id: '1', role: 'assistant', text: INTRO_TEXT_KHMER },
+    {
+      id: '1',
+      role: 'assistant',
+      text: INTRO_TEXT_KHMER,
+    },
   ]);
   const [inputValue, setInputValue] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [savedApiKey, setSavedApiKey] = useState<string>(localStorage.getItem('room_renovator_key') || '');
-  const [showKeyModal, setShowKeyModal] = useState(false);
-  const [tempKey, setTempKey] = useState(savedApiKey);
+  const [hasApiKey, setHasApiKey] = useState(false);
+  const [currentRoomType, setCurrentRoomType] = useState<string>("Room");
+  const [lastGeneratedImages, setLastGeneratedImages] = useState<{ url: string; stage: RenovationStage; label: string }[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const checkKey = async () => {
+      if (typeof window.aistudio !== 'undefined') {
+        const hasKey = await window.aistudio.hasSelectedApiKey();
+        setHasApiKey(hasKey);
+      } else {
+        setHasApiKey(true);
+      }
+    };
+    checkKey();
+  }, []);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -71,57 +97,65 @@ const App: React.FC = () => {
     }
   }, [messages]);
 
-  const saveKey = () => {
-    localStorage.setItem('room_renovator_key', tempKey);
-    setSavedApiKey(tempKey);
-    setShowKeyModal(false);
-  };
-
-  const getEffectiveApiKey = () => {
-    return savedApiKey || process.env.API_KEY || '';
+  const handleSelectKey = async () => {
+    if (typeof window.aistudio !== 'undefined') {
+      await window.aistudio.openSelectKey();
+      setHasApiKey(true);
+    }
   };
 
   const processImage = async (base64Image: string) => {
-    const activeKey = getEffectiveApiKey();
-    if (!activeKey) {
-      setShowKeyModal(true);
-      return;
-    }
-
+    if (isProcessing) return;
     setIsProcessing(true);
+
     const img = new Image();
     img.src = base64Image;
     await new Promise((resolve) => (img.onload = resolve));
     const detectedRatio = getClosestAspectRatio(img.width, img.height);
 
-    const assistantId = Date.now().toString();
-    setMessages(prev => [...prev, 
-      { id: Date.now().toString(), role: 'user', images: [{ url: base64Image, stage: RenovationStage.ORIGINAL, label: STAGE_LABELS[RenovationStage.ORIGINAL] }] },
-      { id: assistantId, role: 'assistant', text: `កំពុងវិភាគបន្ទប់...`, isProcessing: true }
-    ]);
+    const userId = Date.now().toString();
+    setMessages(prev => [...prev, {
+      id: userId,
+      role: 'user',
+      images: [{ url: base64Image, stage: RenovationStage.ORIGINAL, label: STAGE_LABELS[RenovationStage.ORIGINAL] }]
+    }]);
+
+    const assistantId = (Date.now() + 1).toString();
+    setMessages(prev => [...prev, {
+      id: assistantId,
+      role: 'assistant',
+      text: `កំពុងវិភាគប្រភេទបន្ទប់របស់អ្នក...`,
+      isProcessing: true
+    }]);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: activeKey });
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       
       const identifyResponse = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: {
           parts: [
             { inlineData: { data: base64Image.split(',')[1], mimeType: 'image/png' } },
-            { text: "Identify this room type (e.g., Kitchen, Bathroom, Bedroom) in one word." }
+            { text: "What type of room is this? Answer with only one word (e.g., Bathroom, Kitchen, Bedroom, LivingRoom, Office)." }
           ]
         }
       });
       const roomType = identifyResponse.text?.trim() || "Room";
+      setCurrentRoomType(roomType);
 
       const generatedImages: { url: string; stage: RenovationStage; label: string }[] = [
          { url: base64Image, stage: RenovationStage.ORIGINAL, label: STAGE_LABELS[RenovationStage.ORIGINAL] }
       ];
 
-      const stages = [RenovationStage.DEMOLITION, RenovationStage.WALL_PREP, RenovationStage.FLOORING_PAINT, RenovationStage.FINAL_DECOR];
+      const stages = [
+        RenovationStage.DEMOLITION,
+        RenovationStage.WALL_PREP,
+        RenovationStage.FLOORING_PAINT,
+        RenovationStage.FINAL_DECOR
+      ];
 
       for (const stage of stages) {
-        setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, text: `កំពុងរចនា ${roomType}: ${STAGE_LABELS[stage]}...` } : m));
+        setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, text: `កំពុងកែច្នៃ ${roomType}: ${STAGE_LABELS[stage]}...` } : m));
         
         const response = await ai.models.generateContent({
           model: 'gemini-2.5-flash-image',
@@ -131,7 +165,9 @@ const App: React.FC = () => {
               { text: getStagePrompt(stage, roomType) }
             ]
           },
-          config: { imageConfig: { aspectRatio: detectedRatio } }
+          config: { 
+            imageConfig: { aspectRatio: detectedRatio } 
+          }
         });
 
         const part = response.candidates?.[0]?.content?.parts.find(p => p.inlineData);
@@ -144,82 +180,169 @@ const App: React.FC = () => {
         }
       }
 
+      setLastGeneratedImages(generatedImages);
       setMessages(prev => prev.map(m => m.id === assistantId ? {
         ...m,
-        text: `ការផ្លាស់ប្តូរ ${roomType} ក្នុងទម្រង់ ${detectedRatio} រួចរាល់ហើយ!`,
+        text: `នេះគឺជាការផ្លាស់ប្តូរ ${roomType} របស់អ្នកក្នុងទម្រង់ ${detectedRatio}! អ្នកអាចមើលពីការវិវត្តន៍តាមដំណាក់កាលនីមួយៗខាងក្រោម ហើយអ្នកក៏អាចចុច "បង្កើតឡើងវិញ" ប្រសិនបើមិនទាន់ពេញចិត្តនឹងដំណាក់កាលណាមួយ។`,
         images: generatedImages,
         isProcessing: false
       } : m));
 
     } catch (error: any) {
       console.error(error);
-      let errorMsg = "សូមអភ័យទោស មានបញ្ហាបច្ចេកទេស។";
-      if (error?.toString().includes("403")) errorMsg = "❌ កំហុស API Key: សូមប្រាកដថា Key របស់អ្នកមានភ្ជាប់ Billing (Paid Project)។";
-      
-      setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, text: errorMsg, isProcessing: false } : m));
+      setMessages(prev => prev.map(m => m.id === assistantId ? {
+        ...m,
+        text: 'សូមអភ័យទោស មានបញ្ហាបច្ចេកទេស។ សូមព្យាយាមម្តងទៀត។',
+        isProcessing: false
+      } : m));
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const handleRegenerateStage = async (messageId: string, stage: RenovationStage) => {
+    const targetMsg = messages.find(m => m.id === messageId);
+    if (!targetMsg || !targetMsg.images) return;
+    
+    const originalImg = targetMsg.images.find(img => img.stage === RenovationStage.ORIGINAL);
+    if (!originalImg) return;
+
+    // Set loading for this specific message
+    setMessages(prev => prev.map(m => m.id === messageId ? { ...m, isProcessing: true, text: `កំពុងបង្កើត ${STAGE_LABELS[stage]} ឡើងវិញ...` } : m));
+
+    try {
+      const img = new Image();
+      img.src = originalImg.url;
+      await new Promise((resolve) => (img.onload = resolve));
+      const detectedRatio = getClosestAspectRatio(img.width, img.height);
+
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-image',
+        contents: {
+          parts: [
+            { inlineData: { data: originalImg.url.split(',')[1], mimeType: 'image/png' } },
+            { text: getStagePrompt(stage, currentRoomType) + " Generate a different variation from before." }
+          ]
+        },
+        config: { 
+          imageConfig: { aspectRatio: detectedRatio } 
+        }
+      });
+
+      const part = response.candidates?.[0]?.content?.parts.find(p => p.inlineData);
+      if (part?.inlineData) {
+        const newUrl = `data:image/png;base64,${part.inlineData.data}`;
+        setMessages(prev => prev.map(m => m.id === messageId ? {
+          ...m,
+          text: `ការបង្កើតឡើងវិញសម្រាប់ ${STAGE_LABELS[stage]} រួចរាល់ហើយ!`,
+          isProcessing: false,
+          images: m.images?.map(img => img.stage === stage ? { ...img, url: newUrl } : img)
+        } : m));
+      }
+    } catch (error) {
+      console.error(error);
+      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, isProcessing: false, text: "មានបញ្ហាក្នុងការបង្កើតឡើងវិញ។" } : m));
+    }
+  };
+
+  const providePrompts = () => {
+    const roomType = currentRoomType || "Room";
+    const structuredPrompts = [
+      {
+        stage: "Video 1: Original → Stage 1",
+        text: `${roomType} demolition timelapse: construction workers in hard hats and work gear actively removing old cabinets, appliances, peeling wallpaper, and debris. Workers use crowbars, hammers, and tools to strip the ${roomType} down to bare walls. Dust and debris visible as everything is torn out. Camera remains perfectly still in doorway POV. Window position stays exact. Realistic construction site activity with multiple workers coordinating the demo work.`
+      },
+      {
+        stage: "Video 2: Stage 1 → Stage 2",
+        text: `${roomType} drywall installation timelapse: construction workers in work gear measuring, cutting, and installing fresh drywall sheets on walls and ceiling. Workers apply joint compound and tape seams. Ladders and drywall tools visible. Professional contractors working efficiently. Camera remains perfectly still in doorway POV. Window position stays exact. Floor remains unchanged with old textures visible.`
+      },
+      {
+        stage: "Video 3: Stage 2 → Stage 3",
+        text: `${roomType} flooring and painting timelapse: construction workers installing flooring planks piece by piece. Other workers on ladders painting walls and ceiling white with rollers and brushes. Professional coordinated renovation work. Camera remains perfectly still in doorway POV. Window position stays exact. Walls transform from bare drywall to painted white.`
+      },
+      {
+        stage: "Video 4: Stage 3 → Stage 4",
+        text: `${roomType} final installation timelapse: construction workers and installers mounting final fixtures, cabinets, and furniture appropriate for a ${roomType}. Connecting appliances, backsplash tiles, and final decor placement. Final touches with decor placement and cleaning. Professional finish work. Camera remains perfectly still in doorway POV. Window position stays exact. ${roomType} transforms to completed modern design.`
+      }
+    ];
+
+    setMessages(prev => [...prev, {
+      id: Date.now().toString(),
+      role: 'assistant',
+      text: `នេះគឺជា Prompt សម្រាប់បង្កើតវីដេអូ Timelapse ទាំង ៤ ដំណាក់កាលសម្រាប់ ${roomType} របស់អ្នក។ អ្នកអាច Copy ពួកវា ឬទាញយកជា ZIP រួមជាមួយរូបភាពបាន!`,
+      structuredPrompts,
+      images: lastGeneratedImages
+    }]);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        processImage(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isProcessing) {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    if (isProcessing) return;
+
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      const file = files[0];
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          processImage(reader.result as string);
+        };
+        reader.readAsDataURL(file);
+      }
     }
   };
 
   return (
     <div 
       className="flex flex-col h-screen max-w-4xl mx-auto bg-white shadow-2xl overflow-hidden relative"
-      onDragOver={(e) => e.preventDefault()}
-      onDragEnter={() => !isProcessing && setIsDragging(true)}
-      onDragLeave={() => setIsDragging(false)}
-      onDrop={(e) => {
-        e.preventDefault(); setIsDragging(false);
-        const file = e.dataTransfer.files?.[0];
-        if (file?.type.startsWith('image/')) {
-          const reader = new FileReader();
-          reader.onloadend = () => processImage(reader.result as string);
-          reader.readAsDataURL(file);
-        }
-      }}
+      onDragOver={handleDragOver}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
-      {/* API Key Modal */}
-      {showKeyModal && (
-        <div className="absolute inset-0 z-[100] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl p-6 animate-in zoom-in duration-200">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold khmer-font flex items-center gap-2">
-                <Key className="w-5 h-5 text-amber-50" /> បញ្ចូល API Key
-              </h2>
-              <button onClick={() => setShowKeyModal(false)} className="p-2 hover:bg-slate-100 rounded-full">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <p className="text-sm text-slate-600 khmer-font mb-4">
-              សូមបញ្ចូល API Key ពី Google AI Studio របស់អ្នក។ Key នេះនឹងត្រូវបានរក្សាទុកក្នុងកម្មវិធីរុករករបស់អ្នកដោយសុវត្ថិភាព។
-            </p>
-            <input 
-              type="password"
-              value={tempKey}
-              onChange={(e) => setTempKey(e.target.value)}
-              placeholder="AIzaSy..."
-              className="w-full p-3 bg-slate-100 border-2 border-transparent focus:border-amber-500 rounded-xl mb-4 outline-none font-mono"
-            />
-            <div className="flex gap-2">
-              <button 
-                onClick={saveKey}
-                className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-900 font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition-colors khmer-font"
-              >
-                <Save className="w-5 h-5" /> រក្សាទុក
-              </button>
-            </div>
-            <p className="text-[10px] text-slate-400 mt-4 text-center">
-              ប្រសិនបើអ្នកមិនទាន់មាន Key ទេ សូមចូលទៅកាន់ <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-amber-600 underline">AI Studio</a>
-            </p>
-          </div>
-        </div>
-      )}
-
+      {/* Drag and Drop Overlay */}
       {isDragging && (
-        <div className="absolute inset-0 z-50 bg-amber-500/10 backdrop-blur-sm flex items-center justify-center pointer-events-none">
-          <div className="w-[80%] h-[80%] border-4 border-dashed border-amber-500 rounded-3xl flex flex-col items-center justify-center bg-white/90 animate-in zoom-in">
-            <ImageIcon className="w-16 h-16 text-amber-600 mb-4 animate-bounce" />
-            <h2 className="text-2xl font-bold text-slate-900 khmer-font">ទម្លាក់រូបភាពនៅទីនេះ</h2>
+        <div className="absolute inset-0 z-50 bg-amber-500/10 backdrop-blur-sm flex items-center justify-center p-8 pointer-events-none">
+          <div className="w-full h-full border-4 border-dashed border-amber-500 rounded-3xl flex flex-col items-center justify-center bg-white/80 animate-in fade-in zoom-in duration-300">
+            <div className="bg-amber-100 p-6 rounded-full mb-4 animate-bounce">
+              <ImageIcon className="w-16 h-16 text-amber-600" />
+            </div>
+            <h2 className="text-2xl font-bold text-slate-900 khmer-font mb-2">ទម្លាក់រូបភាពនៅទីនេះ</h2>
+            <p className="text-slate-600 khmer-font">ដើម្បីចាប់ផ្តើមការកែលម្អបន្ទប់របស់អ្នក</p>
           </div>
         </div>
       )}
@@ -230,40 +353,44 @@ const App: React.FC = () => {
             <Layers className="w-6 h-6 text-slate-900" />
           </div>
           <div>
-            <h1 className="text-xl font-bold khmer-font">អ្នកកែលម្អបន្ទប់</h1>
-            <p className="text-[10px] text-slate-400 tracking-widest uppercase">Room Renovator AI</p>
+            <h1 className="text-xl font-bold tracking-tight khmer-font">អ្នកកែលម្អបន្ទប់</h1>
+            <div className="flex items-center gap-2">
+               <p className="text-xs text-slate-400 font-medium uppercase tracking-widest">Room Renovator AI</p>
+               <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded border border-emerald-500/30">GEMINI 2.5 FLASH</span>
+            </div>
           </div>
         </div>
         <button 
-          onClick={() => setShowKeyModal(true)}
-          className={`text-xs font-bold py-2 px-4 rounded-full transition-all flex items-center gap-2 ${
-            savedApiKey ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500 text-slate-900 animate-pulse'
+          onClick={handleSelectKey}
+          className={`text-xs font-bold py-1 px-3 rounded transition-colors ${
+            hasApiKey ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500 hover:bg-amber-400 text-slate-900'
           }`}
         >
-          {savedApiKey ? <UserCheck className="w-4 h-4" /> : <Key className="w-4 h-4" />}
-          <span className="khmer-font">{savedApiKey ? 'API Key បានរក្សាទុក' : 'បញ្ចូល API Key ពី AI Studio'}</span>
+          {hasApiKey ? 'API KEY បានភ្ជាប់' : 'ភ្ជាប់ API KEY'}
         </button>
       </header>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-6 bg-slate-50 no-scrollbar">
+      <div 
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto p-4 space-y-6 no-scrollbar bg-slate-50 relative"
+      >
         {messages.map((msg) => (
           <MessageBubble 
             key={msg.id} 
             message={msg} 
-            onRegenerateStage={(stage) => {
-              const original = msg.images?.find(i => i.stage === RenovationStage.ORIGINAL);
-              if (original) processImage(original.url);
-            }}
+            onGenerateVideo={providePrompts}
+            onRegenerateStage={(stage) => handleRegenerateStage(msg.id, stage)}
           />
         ))}
       </div>
 
-      <div className="p-4 bg-white border-t border-slate-200">
+      <div className="p-4 bg-white border-t border-slate-200 z-10">
         <div className="flex items-end gap-2 max-w-3xl mx-auto">
           <button 
             onClick={() => fileInputRef.current?.click()}
             disabled={isProcessing}
-            className="p-3 rounded-full bg-slate-100 text-slate-600 hover:bg-amber-100 hover:text-amber-600 transition-all"
+            className="p-3 rounded-full bg-slate-100 text-slate-600 hover:bg-amber-100 hover:text-amber-600 transition-all disabled:opacity-50"
+            title="Upload room photo"
           >
             <Upload className="w-6 h-6" />
           </button>
@@ -272,25 +399,49 @@ const App: React.FC = () => {
             <textarea
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
-              placeholder="ផ្ញើរូបភាពបន្ទប់ដើម្បីចាប់ផ្តើម..."
+              placeholder="សរសេរសារនៅទីនេះ ឬអូសរូបភាពទម្លាក់..."
               rows={1}
               className="w-full p-3 pr-12 rounded-2xl bg-slate-100 border-none focus:ring-2 focus:ring-amber-500 resize-none khmer-font"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  if (inputValue.trim()) {
+                    const id = Date.now().toString();
+                    setMessages(prev => [...prev, { id, role: 'user', text: inputValue }]);
+                    setInputValue('');
+                  }
+                }
+              }}
             />
+            <button 
+              className="absolute right-2 bottom-2 p-2 text-amber-600 hover:scale-110 transition-transform"
+              disabled={!inputValue.trim() || isProcessing}
+              onClick={() => {
+                 if (inputValue.trim()) {
+                    const id = Date.now().toString();
+                    setMessages(prev => [...prev, { id, role: 'user', text: inputValue }]);
+                    setInputValue('');
+                 }
+              }}
+            >
+              <Send className="w-5 h-5" />
+            </button>
           </div>
         </div>
-        <p className="text-[10px] text-center text-slate-400 khmer-font mt-2 flex items-center justify-center gap-1">
-          <AlertCircle className="w-3 h-3" /> តម្រូវឱ្យមាន API Key ពី Paid Project ដើម្បីបង្កើតរូបភាព
-        </p>
+        <div className="flex flex-col items-center mt-2 gap-1">
+          <p className="text-[10px] text-center text-slate-400 khmer-font">
+            ប្រើប្រាស់បច្ចេកវិទ្យា Gemini 2.5 Flash Image សម្រាប់ការបង្កើតរូបភាព
+          </p>
+        </div>
       </div>
 
-      <input type="file" ref={fileInputRef} onChange={(e) => {
-        const file = e.target.files?.[0];
-        if (file) {
-          const reader = new FileReader();
-          reader.onloadend = () => processImage(reader.result as string);
-          reader.readAsDataURL(file);
-        }
-      }} accept="image/*" className="hidden" />
+      <input 
+        type="file" 
+        ref={fileInputRef} 
+        onChange={handleFileUpload} 
+        accept="image/*" 
+        className="hidden" 
+      />
     </div>
   );
 };
