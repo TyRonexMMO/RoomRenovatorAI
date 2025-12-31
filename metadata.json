@@ -1,0 +1,8 @@
+
+{
+  "name": "អ្នកកែលម្អបន្ទប់ (Room Renovator)",
+  "description": "An AI-powered room renovation assistant that transforms dilapidated spaces into dream rooms through 4 progressive stages and optional timelapse videos.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
