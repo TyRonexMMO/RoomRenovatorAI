@@ -1,8 +1,8 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { GoogleGenAI } from "@google/genai";
-import { ChatMessage, RenovationStage, GenerationState } from './types';
-import MessageBubble from './components/MessageBubble';
+import { ChatMessage, RenovationStage, GenerationState } from './types.ts';
+import MessageBubble from './components/MessageBubble.tsx';
 import { Camera, Send, Upload, RefreshCw, Layers, Film, Image as ImageIcon, UserCheck, UserPlus } from 'lucide-react';
 
 const INTRO_TEXT_KHMER = `សួស្តី! ខ្ញុំគឺជាអ្នកកែលម្អបន្ទប់ — ត្រៀមខ្លួនជាស្រេចក្នុងការផ្លាស់ប្តូរទីធ្លាដែលទ្រុឌទ្រោម ទៅជាបន្ទប់ក្នុងក្តីសុបិន! 🏗️✨
@@ -85,7 +85,6 @@ const App: React.FC = () => {
         const hasKey = await window.aistudio.hasSelectedApiKey();
         setHasApiKey(hasKey);
       } else {
-        // In development or non-iframe environments, assume key is from environment
         setHasApiKey(true);
       }
     };
@@ -102,7 +101,6 @@ const App: React.FC = () => {
     if (typeof window.aistudio !== 'undefined') {
       try {
         await window.aistudio.openSelectKey();
-        // After opening, we assume success as per instructions
         setHasApiKey(true);
         setMessages(prev => [...prev, {
           id: Date.now().toString(),
